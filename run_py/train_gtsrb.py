@@ -25,14 +25,65 @@ from gtsrb_common import (
     seed_everything,
     select_device,
 )
-from network import HybridQWideResNet, WideResNet
+from network import (
+    HybridQWideResNet,
+    HybridQWideResNetMLP,
+    HybridQWideResNetNoQuantum,
+    WideResNet,
+    WideResNetStrong,
+)
 
 
 console = Console()
 
+MODEL_ALIASES = {
+    "classical": "classical_legacy",
+    "hybrid": "hybrid_quantum",
+}
+
+MODEL_GROUPS = {
+    "paper_core": ["classical_strong", "hybrid_quantum"],
+    "ablation": ["hybrid_quantum", "hybrid_noquantum", "hybrid_mlp"],
+    "all": ["classical_legacy", "classical_strong", "hybrid_quantum", "hybrid_noquantum", "hybrid_mlp"],
+    "both": ["classical_legacy", "hybrid_quantum"],
+}
+
+CANONICAL_MODELS = (
+    "classical_legacy",
+    "classical_strong",
+    "hybrid_quantum",
+    "hybrid_noquantum",
+    "hybrid_mlp",
+)
+
+
+def normalize_model_name(model_name):
+    return MODEL_ALIASES.get(model_name, model_name)
+
+
+def expand_model_selection(value):
+    selected = []
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        item = normalize_model_name(item)
+        if item in MODEL_GROUPS:
+            names = MODEL_GROUPS[item]
+        else:
+            names = [item]
+        for name in names:
+            if name not in CANONICAL_MODELS:
+                allowed = sorted(set(CANONICAL_MODELS) | set(MODEL_ALIASES) | set(MODEL_GROUPS))
+                raise ValueError(f"Unknown model '{name}'. Allowed values: {allowed}")
+            if name not in selected:
+                selected.append(name)
+    return selected
+
 
 def build_model(args, model_name):
-    if model_name == "classical":
+    model_name = normalize_model_name(model_name)
+    if model_name == "classical_legacy":
         return WideResNet(
             n_classes=GTSRB_NUM_CLASSES,
             depth=args.depth,
@@ -40,8 +91,33 @@ def build_model(args, model_name):
             drop_rate=args.drop_rate,
             latent_dim=args.latent_dim,
         )
-    if model_name == "hybrid":
+    if model_name == "classical_strong":
+        return WideResNetStrong(
+            n_classes=GTSRB_NUM_CLASSES,
+            depth=args.depth,
+            widen_factor=args.widen_factor,
+            drop_rate=args.drop_rate,
+        )
+    if model_name == "hybrid_quantum":
         return HybridQWideResNet(
+            n_classes=GTSRB_NUM_CLASSES,
+            depth=args.depth,
+            widen_factor=args.widen_factor,
+            drop_rate=args.drop_rate,
+            n_qubits=args.n_qubits,
+            n_layers=args.n_layers,
+        )
+    if model_name == "hybrid_noquantum":
+        return HybridQWideResNetNoQuantum(
+            n_classes=GTSRB_NUM_CLASSES,
+            depth=args.depth,
+            widen_factor=args.widen_factor,
+            drop_rate=args.drop_rate,
+            n_qubits=args.n_qubits,
+            n_layers=args.n_layers,
+        )
+    if model_name == "hybrid_mlp":
+        return HybridQWideResNetMLP(
             n_classes=GTSRB_NUM_CLASSES,
             depth=args.depth,
             widen_factor=args.widen_factor,
@@ -53,15 +129,11 @@ def build_model(args, model_name):
 
 
 def checkpoint_name(model_name):
-    if model_name == "classical":
-        return "best_wideresnet_gtsrb.pth"
-    return "best_hybrid_qwideresnet_gtsrb.pth"
+    return f"best_{normalize_model_name(model_name)}_gtsrb.pth"
 
 
 def history_stem(model_name):
-    if model_name == "classical":
-        return "wideresnet_gtsrb"
-    return "hybrid_qwideresnet_gtsrb"
+    return f"{normalize_model_name(model_name)}_gtsrb"
 
 
 def make_optimizer(args, model):
@@ -153,10 +225,36 @@ def plot_history(history, path, title):
     plt.close()
 
 
+def make_metadata(args, model_name, train_loader, val_loader, test_loader, device):
+    return {
+        "model": normalize_model_name(model_name),
+        "seed": args.seed,
+        "device": str(device),
+        "epochs": args.epochs,
+        "batch_size": args.batch_size,
+        "optimizer": args.optimizer,
+        "lr": args.lr,
+        "weight_decay": args.weight_decay,
+        "depth": args.depth,
+        "widen_factor": args.widen_factor,
+        "drop_rate": args.drop_rate,
+        "latent_dim": args.latent_dim,
+        "n_qubits": args.n_qubits,
+        "n_layers": args.n_layers,
+        "image_size": args.image_size,
+        "val_fraction": args.val_fraction,
+        "train_size": len(train_loader.dataset),
+        "val_size": len(val_loader.dataset),
+        "test_size": len(test_loader.dataset),
+        "data_dir": args.data_dir,
+    }
+
+
 def run_training(args, model_name, train_loader, val_loader, test_loader, save_dir):
+    model_name = normalize_model_name(model_name)
     device = select_device(args.device)
-    if model_name == "hybrid" and device.type == "mps" and not args.allow_mps_quantum:
-        console.print("[yellow]PennyLane default.qubit is CPU-oriented; using CPU for hybrid model.[/yellow]")
+    if model_name == "hybrid_quantum" and device.type == "mps" and not args.allow_mps_quantum:
+        console.print("[yellow]PennyLane default.qubit is CPU-oriented; using CPU for hybrid_quantum.[/yellow]")
         device = torch.device("cpu")
 
     model = build_model(args, model_name).to(device)
@@ -173,6 +271,7 @@ def run_training(args, model_name, train_loader, val_loader, test_loader, save_d
     console.print(Panel.fit(
         f"Model: {model_name}\n"
         f"Device: {device}\n"
+        f"Seed: {args.seed}\n"
         f"Epochs: {args.epochs}\n"
         f"Batch size: {args.batch_size}\n"
         f"Checkpoint: {ckpt_path}",
@@ -181,15 +280,18 @@ def run_training(args, model_name, train_loader, val_loader, test_loader, save_d
     ))
 
     history = {
+        "metadata": make_metadata(args, model_name, train_loader, val_loader, test_loader, device),
         "train_loss": [],
         "train_acc": [],
         "val_loss": [],
         "val_acc": [],
+        "test_loss": None,
         "test_acc": None,
         "best_val_acc": 0.0,
         "best_epoch": 0,
+        "checkpoint": ckpt_path,
     }
-    best_val_acc = 0.0
+    best_val_acc = float("-inf")
 
     for epoch in range(args.epochs):
         console.rule(f"[bold blue]Epoch {epoch + 1}/{args.epochs}[/bold blue]")
@@ -221,7 +323,8 @@ def run_training(args, model_name, train_loader, val_loader, test_loader, save_d
         plot_history(history, plot_path, model_name)
 
     model.load_state_dict(torch.load(ckpt_path, map_location=device))
-    _, test_acc = evaluate(model, test_loader, criterion, device, description="Test")
+    test_loss, test_acc = evaluate(model, test_loader, criterion, device, description="Test")
+    history["test_loss"] = test_loss
     history["test_acc"] = test_acc
     save_json(history_path, history)
     plot_history(history, plot_path, model_name)
@@ -233,13 +336,19 @@ def run_training(args, model_name, train_loader, val_loader, test_loader, save_d
         title=f"{model_name} result",
         border_style="green",
     ))
+    return history
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train WideResNet/HybridQWideResNet on GTSRB.")
-    parser.add_argument("--model", choices=["classical", "hybrid", "both"], default="both")
+    parser = argparse.ArgumentParser(description="Train GTSRB model variants.")
+    parser.add_argument(
+        "--model",
+        default="paper_core",
+        help="Comma-separated models or group. Examples: classical_strong,hybrid_quantum,paper_core,ablation,all.",
+    )
     parser.add_argument("--data-dir", default=None)
     parser.add_argument("--save-dir", default=None)
+    parser.add_argument("--seed-subdir", action="store_true", help="Write outputs under save-dir/seed_<seed>.")
     parser.add_argument("--image-size", type=int, default=32)
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=128)
@@ -270,14 +379,16 @@ def main():
     seed_everything(args.seed)
 
     root = project_root()
-    data_dir = args.data_dir or os.path.join(root, "data_gtsrb")
+    args.data_dir = args.data_dir or os.path.join(root, "data_gtsrb")
     save_dir = args.save_dir or os.path.join(root, "model_history_gtsrb")
-    os.makedirs(data_dir, exist_ok=True)
+    if args.seed_subdir:
+        save_dir = os.path.join(save_dir, f"seed_{args.seed}")
+    os.makedirs(args.data_dir, exist_ok=True)
     os.makedirs(save_dir, exist_ok=True)
 
     base_device = select_device(args.device)
     train_loader, val_loader, test_loader = make_gtsrb_loaders(
-        data_dir=data_dir,
+        data_dir=args.data_dir,
         image_size=args.image_size,
         batch_size=args.batch_size,
         val_fraction=args.val_fraction,
@@ -289,8 +400,7 @@ def main():
         val_samples=args.val_samples,
     )
 
-    model_names = ["classical", "hybrid"] if args.model == "both" else [args.model]
-    for model_name in model_names:
+    for model_name in expand_model_selection(args.model):
         run_training(args, model_name, train_loader, val_loader, test_loader, save_dir)
 
 

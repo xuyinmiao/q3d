@@ -9,7 +9,8 @@ Use these paths unless the server administrator confirms a different data mount:
 ```text
 ~/q3d/                                  # source code on system disk
 /data/q3d/datasets/gtsrb/               # GTSRB dataset on data disk
-/data/q3d/outputs/model_history_gtsrb/  # checkpoints, logs, plots, results on data disk
+/data/q3d/outputs/gtsrb_paper/          # paper-grade multi-seed outputs on data disk
+/data/q3d/outputs/model_history_gtsrb/  # optional one-off debugging outputs
 ```
 
 Do not put datasets, checkpoints, or generated experiment results inside `~/q3d`.
@@ -22,13 +23,12 @@ Give opencode this task on the remote server:
 Clone or update https://github.com/xuyinmiao/q3d.git into ~/q3d.
 Create a Python virtual environment in ~/q3d/.venv.
 Install requirements.txt.
-Create /data/q3d/datasets/gtsrb and /data/q3d/outputs/model_history_gtsrb.
-Use /data/q3d/datasets/gtsrb as --data-dir and /data/q3d/outputs/model_history_gtsrb as --save-dir.
-Run a 1-epoch classical GTSRB smoke test first.
-If the smoke test passes, start full classical training.
-Then start hybrid training only after the classical checkpoint is saved.
+Create /data/q3d/datasets/gtsrb and /data/q3d/outputs/gtsrb_paper.
+Use /data/q3d/datasets/gtsrb as --data-dir and /data/q3d/outputs/gtsrb_paper as --output-dir.
+Run a 1-epoch classical_strong GTSRB smoke test first.
+If the smoke test passes, start the paper-grade runner for classical_strong, hybrid_quantum, hybrid_noquantum, and hybrid_mlp across seeds 42, 123, and 2024.
 Do not move datasets or outputs into the git repository.
-Record commands and failures in /data/q3d/outputs/model_history_gtsrb/run_notes.md.
+Record commands and failures in /data/q3d/outputs/gtsrb_paper/run_notes.md.
 ```
 
 ## Environment Setup
@@ -50,7 +50,7 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 
 mkdir -p /data/q3d/datasets/gtsrb
-mkdir -p /data/q3d/outputs/model_history_gtsrb
+mkdir -p /data/q3d/outputs/gtsrb_paper
 ```
 
 Check the runtime:
@@ -96,7 +96,7 @@ find /data/q3d/datasets/gtsrb -maxdepth 3 -type f | head
 If torchvision download fails, keep the failed command output in:
 
 ```text
-/data/q3d/outputs/model_history_gtsrb/run_notes.md
+/data/q3d/outputs/gtsrb_paper/run_notes.md
 ```
 
 ## Smoke Test First
@@ -108,7 +108,7 @@ cd ~/q3d
 source .venv/bin/activate
 
 python run_py/train_gtsrb.py \
-  --model classical \
+  --model classical_strong \
   --epochs 1 \
   --batch-size 32 \
   --widen-factor 1 \
@@ -116,103 +116,57 @@ python run_py/train_gtsrb.py \
   --val-samples 128 \
   --device cuda \
   --data-dir /data/q3d/datasets/gtsrb \
-  --save-dir /data/q3d/outputs/model_history_gtsrb
+  --save-dir /data/q3d/outputs/gtsrb_paper/smoke
 ```
 
 Expected result:
 
 ```text
-/data/q3d/outputs/model_history_gtsrb/best_wideresnet_gtsrb.pth
-/data/q3d/outputs/model_history_gtsrb/wideresnet_gtsrb_history.json
+/data/q3d/outputs/gtsrb_paper/smoke/best_classical_strong_gtsrb.pth
+/data/q3d/outputs/gtsrb_paper/smoke/classical_strong_gtsrb_history.json
 ```
 
 If the checkpoint is not created, stop and inspect the error before starting full training.
 
-## Full Classical Training
+## Paper-grade Multi-seed Run
 
-Start after the smoke test passes:
-
-```bash
-cd ~/q3d
-source .venv/bin/activate
-
-python run_py/train_gtsrb.py \
-  --model classical \
-  --epochs 50 \
-  --batch-size 128 \
-  --widen-factor 4 \
-  --device cuda \
-  --data-dir /data/q3d/datasets/gtsrb \
-  --save-dir /data/q3d/outputs/model_history_gtsrb
-```
-
-Expected checkpoint:
-
-```text
-/data/q3d/outputs/model_history_gtsrb/best_wideresnet_gtsrb.pth
-```
-
-## Full Hybrid Training
-
-Start only after the classical baseline has completed:
+Start after the smoke test passes. This trains the strong classical baseline, the quantum hybrid model, and two quantum-layer ablations across three seeds, then runs FGSM/PGD/C&W and writes mean/std summaries.
 
 ```bash
 cd ~/q3d
 source .venv/bin/activate
 
-python run_py/train_gtsrb.py \
-  --model hybrid \
-  --epochs 50 \
+python run_py/run_gtsrb_experiments.py \
+  --seeds 42,123,2024 \
+  --models classical_strong,hybrid_quantum,hybrid_noquantum,hybrid_mlp \
+  --epochs 80 \
   --batch-size 64 \
+  --eval-batch-size 64 \
+  --optimizer sgd \
+  --lr 0.05 \
   --widen-factor 4 \
-  --device cuda \
-  --data-dir /data/q3d/datasets/gtsrb \
-  --save-dir /data/q3d/outputs/model_history_gtsrb
-```
-
-Expected checkpoint:
-
-```text
-/data/q3d/outputs/model_history_gtsrb/best_hybrid_qwideresnet_gtsrb.pth
-```
-
-Hybrid training uses PennyLane `default.qubit`; it can be much slower than classical training. If CUDA execution fails due to device incompatibility in the quantum layer, rerun hybrid training with:
-
-```bash
---device cpu
-```
-
-and reduce batch size to `16` or `32`.
-
-## Robustness Evaluation
-
-Run this only after both checkpoints exist:
-
-```bash
-cd ~/q3d
-source .venv/bin/activate
-
-python run_py/attack_eval_gtsrb.py \
-  --model both \
   --attacks fgsm,pgd,cw \
-  --epsilons 0,0.0039215686,0.0078431373,0.0156862745,0.031372549 \
+  --epsilons 0,0.0039215686,0.0078431373,0.0156862745,0.031372549,0.062745098 \
   --test-samples 2000 \
-  --batch-size 64 \
   --pgd-steps 20 \
   --cw-steps 50 \
   --device cuda \
   --data-dir /data/q3d/datasets/gtsrb \
-  --save-dir /data/q3d/outputs/model_history_gtsrb \
-  --output-dir /data/q3d/outputs/model_history_gtsrb
+  --output-dir /data/q3d/outputs/gtsrb_paper
 ```
 
 Expected outputs:
 
 ```text
-/data/q3d/outputs/model_history_gtsrb/gtsrb_robustness_results.json
-/data/q3d/outputs/model_history_gtsrb/gtsrb_robustness_results.txt
-/data/q3d/outputs/model_history_gtsrb/gtsrb_robustness_results.png
+/data/q3d/outputs/gtsrb_paper/seed_42/
+/data/q3d/outputs/gtsrb_paper/seed_123/
+/data/q3d/outputs/gtsrb_paper/seed_2024/
+/data/q3d/outputs/gtsrb_paper/summary_clean.csv
+/data/q3d/outputs/gtsrb_paper/summary_robustness.csv
+/data/q3d/outputs/gtsrb_paper/summary_ablation.csv
 ```
+
+Hybrid training uses PennyLane `default.qubit`; it can be much slower than classical training. If CUDA execution fails due to device incompatibility in the quantum layer, rerun a smaller debug job with `--device cpu` and lower `--batch-size`.
 
 ## Logging
 
@@ -222,20 +176,20 @@ Example:
 
 ```bash
 nohup python run_py/train_gtsrb.py \
-  --model classical \
-  --epochs 50 \
-  --batch-size 128 \
+  --model classical_strong \
+  --epochs 80 \
+  --batch-size 64 \
   --widen-factor 4 \
   --device cuda \
   --data-dir /data/q3d/datasets/gtsrb \
-  --save-dir /data/q3d/outputs/model_history_gtsrb \
-  > /data/q3d/outputs/model_history_gtsrb/classical_train.log 2>&1 &
+  --save-dir /data/q3d/outputs/gtsrb_paper/debug_classical_strong \
+  > /data/q3d/outputs/gtsrb_paper/classical_strong_train.log 2>&1 &
 ```
 
 Monitor logs:
 
 ```bash
-tail -f /data/q3d/outputs/model_history_gtsrb/classical_train.log
+tail -f /data/q3d/outputs/gtsrb_paper/classical_strong_train.log
 ```
 
 ## Safety Checks
@@ -256,4 +210,4 @@ The second command should print nothing.
 - `cuda_available False`: install the CUDA-compatible PyTorch build for the server.
 - GTSRB download fails: manually upload the dataset to `/data/q3d/datasets/gtsrb`.
 - Hybrid training is too slow: lower `--batch-size`, lower `--widen-factor`, or use `--device cpu` for correctness testing.
-- Attack evaluation cannot find checkpoints: run both full training commands first or pass explicit `--classical-ckpt` and `--hybrid-ckpt`.
+- Attack evaluation cannot find checkpoints: check the matching `seed_<seed>` directory or pass explicit checkpoint paths.

@@ -2,6 +2,8 @@
 
 This project keeps source code on the system disk and training data/results on the data disk.
 
+Current paper-grade workflow uses `run_py/run_gtsrb_experiments.py` to run `classical_strong`, `hybrid_quantum`, `hybrid_noquantum`, and `hybrid_mlp` across seeds `42,123,2024`, then writes mean/std summaries. The old `classical` alias is a legacy 8-d bottleneck baseline and should not be used as the main paper baseline.
+
 ## Directory Layout
 
 Use this layout on the remote server:
@@ -9,7 +11,8 @@ Use this layout on the remote server:
 ```text
 ~/q3d/                                  # source code, system disk
 /data/q3d/datasets/gtsrb/               # GTSRB dataset, data disk
-/data/q3d/outputs/model_history_gtsrb/  # checkpoints and experiment results, data disk
+/data/q3d/outputs/gtsrb_paper/          # paper-grade multi-seed outputs, data disk
+/data/q3d/outputs/model_history_gtsrb/  # optional one-off debugging outputs
 ```
 
 If the server uses a different data mount, replace `/data/q3d/...` in the commands below.
@@ -26,7 +29,7 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt
 
 mkdir -p /data/q3d/datasets/gtsrb
-mkdir -p /data/q3d/outputs/model_history_gtsrb
+mkdir -p /data/q3d/outputs/gtsrb_paper
 ```
 
 ## Data
@@ -48,7 +51,7 @@ Run a small classical training job first:
 
 ```bash
 python run_py/train_gtsrb.py \
-  --model classical \
+  --model classical_strong \
   --epochs 1 \
   --batch-size 32 \
   --widen-factor 1 \
@@ -56,51 +59,48 @@ python run_py/train_gtsrb.py \
   --val-samples 128 \
   --device cuda \
   --data-dir /data/q3d/datasets/gtsrb \
-  --save-dir /data/q3d/outputs/model_history_gtsrb
+  --save-dir /data/q3d/outputs/gtsrb_paper/smoke
 ```
 
-## Full Training
+## Paper-grade Run
 
-Train the classical baseline:
-
-```bash
-python run_py/train_gtsrb.py \
-  --model classical \
-  --epochs 50 \
-  --batch-size 128 \
-  --widen-factor 4 \
-  --device cuda \
-  --data-dir /data/q3d/datasets/gtsrb \
-  --save-dir /data/q3d/outputs/model_history_gtsrb
-```
-
-Train the hybrid quantum-classical model:
+Run the full multi-seed experiment:
 
 ```bash
-python run_py/train_gtsrb.py \
-  --model hybrid \
-  --epochs 50 \
+python run_py/run_gtsrb_experiments.py \
+  --seeds 42,123,2024 \
+  --models classical_strong,hybrid_quantum,hybrid_noquantum,hybrid_mlp \
+  --epochs 80 \
   --batch-size 64 \
+  --eval-batch-size 64 \
+  --optimizer sgd \
+  --lr 0.05 \
   --widen-factor 4 \
+  --attacks fgsm,pgd,cw \
+  --epsilons 0,0.0039215686,0.0078431373,0.0156862745,0.031372549,0.062745098 \
+  --test-samples 2000 \
+  --pgd-steps 20 \
+  --cw-steps 50 \
   --device cuda \
   --data-dir /data/q3d/datasets/gtsrb \
-  --save-dir /data/q3d/outputs/model_history_gtsrb
+  --output-dir /data/q3d/outputs/gtsrb_paper
 ```
 
-## Adversarial Evaluation
+## Optional One-off Evaluation
 
 ```bash
 python run_py/attack_eval_gtsrb.py \
-  --model both \
+  --model classical_strong,hybrid_quantum,hybrid_noquantum,hybrid_mlp \
   --attacks fgsm,pgd,cw \
+  --epsilons 0,0.0039215686,0.0078431373,0.0156862745,0.031372549,0.062745098 \
   --test-samples 2000 \
   --batch-size 64 \
   --pgd-steps 20 \
   --cw-steps 50 \
   --device cuda \
   --data-dir /data/q3d/datasets/gtsrb \
-  --save-dir /data/q3d/outputs/model_history_gtsrb \
-  --output-dir /data/q3d/outputs/model_history_gtsrb
+  --save-dir /data/q3d/outputs/gtsrb_paper/seed_42 \
+  --output-dir /data/q3d/outputs/gtsrb_paper/seed_42
 ```
 
-Outputs are written to `/data/q3d/outputs/model_history_gtsrb/`.
+Use this only when checkpoints already exist in the selected seed directory. The paper-grade runner already performs this step automatically.

@@ -159,6 +159,37 @@ class WideResNet(nn.Module):
         out = torch.sigmoid(self.feature_reduction(out)) 
         return self.fc(out)
 
+class WideResNetStrong(nn.Module):
+    """Standard WideResNet classifier without the 8-d latent bottleneck."""
+
+    def __init__(self, n_classes=10, depth=28, widen_factor=10, drop_rate=0.3):
+        super(WideResNetStrong, self).__init__()
+
+        nChannels = [16, 16*widen_factor, 32*widen_factor, 64*widen_factor]
+        assert ((depth - 4) % 6 == 0)
+        n = (depth - 4) // 6
+        block = BasicBlock
+
+        self.conv1 = nn.Conv2d(3, nChannels[0], kernel_size=3, stride=1,
+                               padding=1, bias=False)
+        self.block1 = NetworkBlock(n, nChannels[0], nChannels[1], block, 1, drop_rate)
+        self.block2 = NetworkBlock(n, nChannels[1], nChannels[2], block, 2, drop_rate)
+        self.block3 = NetworkBlock(n, nChannels[2], nChannels[3], block, 2, drop_rate)
+        self.bn1 = nn.BatchNorm2d(nChannels[3])
+        self.relu = nn.ReLU(inplace=True)
+        self.nChannels = nChannels[3]
+        self.fc = nn.Linear(self.nChannels, n_classes)
+
+    def forward(self, x):
+        out = self.conv1(x)
+        out = self.block1(out)
+        out = self.block2(out)
+        out = self.block3(out)
+        out = self.relu(self.bn1(out))
+        out = F.avg_pool2d(out, out.size()[2])
+        out = out.view(-1, self.nChannels)
+        return self.fc(out)
+
 class HybridQWideResNet(nn.Module):  
     def __init__(self, n_classes=10, depth=28, widen_factor=10, drop_rate=0.3, n_qubits=8, n_layers=3):
         super(HybridQWideResNet, self).__init__()
@@ -195,4 +226,79 @@ class HybridQWideResNet(nn.Module):
         out = out.view(-1, self.nChannels)
         out = torch.sigmoid(self.feature_reduction(out)) * (2 * np.pi)
         out = self.quantum_layer(out)
+        return self.fc(out)
+
+class HybridQWideResNetNoQuantum(nn.Module):
+    """Hybrid-shaped WRN ablation that removes the quantum layer."""
+
+    def __init__(self, n_classes=10, depth=28, widen_factor=10, drop_rate=0.3,
+                 n_qubits=8, n_layers=3):
+        super(HybridQWideResNetNoQuantum, self).__init__()
+
+        nChannels = [16, 16*widen_factor, 32*widen_factor, 64*widen_factor]
+        assert ((depth - 4) % 6 == 0)
+        n = (depth - 4) // 6
+        block = BasicBlock
+
+        self.conv1 = nn.Conv2d(3, nChannels[0], kernel_size=3, stride=1,
+                               padding=1, bias=False)
+        self.block1 = NetworkBlock(n, nChannels[0], nChannels[1], block, 1, drop_rate)
+        self.block2 = NetworkBlock(n, nChannels[1], nChannels[2], block, 2, drop_rate)
+        self.block3 = NetworkBlock(n, nChannels[2], nChannels[3], block, 2, drop_rate)
+        self.bn1 = nn.BatchNorm2d(nChannels[3])
+        self.relu = nn.ReLU(inplace=True)
+        self.nChannels = nChannels[3]
+        self.feature_reduction = nn.Linear(self.nChannels, n_qubits)
+        self.fc = nn.Linear(n_qubits, n_classes)
+
+    def forward(self, x):
+        out = self.conv1(x)
+        out = self.block1(out)
+        out = self.block2(out)
+        out = self.block3(out)
+        out = self.relu(self.bn1(out))
+        out = F.avg_pool2d(out, out.size()[2])
+        out = out.view(-1, self.nChannels)
+        out = torch.sigmoid(self.feature_reduction(out)) * (2 * np.pi)
+        return self.fc(out)
+
+class HybridQWideResNetMLP(nn.Module):
+    """Hybrid-shaped WRN ablation that replaces the quantum layer with an MLP."""
+
+    def __init__(self, n_classes=10, depth=28, widen_factor=10, drop_rate=0.3,
+                 n_qubits=8, n_layers=3):
+        super(HybridQWideResNetMLP, self).__init__()
+
+        nChannels = [16, 16*widen_factor, 32*widen_factor, 64*widen_factor]
+        assert ((depth - 4) % 6 == 0)
+        n = (depth - 4) // 6
+        block = BasicBlock
+
+        self.conv1 = nn.Conv2d(3, nChannels[0], kernel_size=3, stride=1,
+                               padding=1, bias=False)
+        self.block1 = NetworkBlock(n, nChannels[0], nChannels[1], block, 1, drop_rate)
+        self.block2 = NetworkBlock(n, nChannels[1], nChannels[2], block, 2, drop_rate)
+        self.block3 = NetworkBlock(n, nChannels[2], nChannels[3], block, 2, drop_rate)
+        self.bn1 = nn.BatchNorm2d(nChannels[3])
+        self.relu = nn.ReLU(inplace=True)
+        self.nChannels = nChannels[3]
+        self.feature_reduction = nn.Linear(self.nChannels, n_qubits)
+        self.classical_layer = nn.Sequential(
+            nn.Linear(n_qubits, n_qubits),
+            nn.ReLU(),
+            nn.Linear(n_qubits, n_qubits),
+            nn.ReLU(),
+        )
+        self.fc = nn.Linear(n_qubits, n_classes)
+
+    def forward(self, x):
+        out = self.conv1(x)
+        out = self.block1(out)
+        out = self.block2(out)
+        out = self.block3(out)
+        out = self.relu(self.bn1(out))
+        out = F.avg_pool2d(out, out.size()[2])
+        out = out.view(-1, self.nChannels)
+        out = torch.sigmoid(self.feature_reduction(out)) * (2 * np.pi)
+        out = self.classical_layer(out)
         return self.fc(out)

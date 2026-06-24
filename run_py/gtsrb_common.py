@@ -25,6 +25,9 @@ def seed_everything(seed):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    if hasattr(torch.backends, "cudnn"):
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
 
 
 def select_device(device_name="auto"):
@@ -42,6 +45,15 @@ def loader_kwargs(num_workers, device):
         "num_workers": num_workers,
         "pin_memory": device.type == "cuda",
     }
+
+
+def make_worker_init_fn(seed):
+    def seed_worker(worker_id):
+        worker_seed = (seed + worker_id) % 2**32
+        random.seed(worker_seed)
+        np.random.seed(worker_seed)
+
+    return seed_worker
 
 
 class TransformedSubset(Dataset):
@@ -110,8 +122,8 @@ def make_gtsrb_loaders(
 ):
     base_train = GTSRB(root=data_dir, split="train", download=download)
     n_total = len(base_train)
-    generator = torch.Generator().manual_seed(seed)
-    shuffled = torch.randperm(n_total, generator=generator).tolist()
+    split_generator = torch.Generator().manual_seed(seed)
+    shuffled = torch.randperm(n_total, generator=split_generator).tolist()
     val_size = int(n_total * val_fraction)
     val_indices = shuffled[:val_size]
     train_indices = shuffled[val_size:]
@@ -131,9 +143,30 @@ def make_gtsrb_loaders(
     )
 
     kwargs = loader_kwargs(num_workers, device)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, **kwargs)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, **kwargs)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, **kwargs)
+    train_generator = torch.Generator().manual_seed(seed + 1)
+    worker_init_fn = make_worker_init_fn(seed)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        generator=train_generator,
+        worker_init_fn=worker_init_fn,
+        **kwargs,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        worker_init_fn=worker_init_fn,
+        **kwargs,
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        worker_init_fn=worker_init_fn,
+        **kwargs,
+    )
     return train_loader, val_loader, test_loader
 
 
@@ -145,6 +178,7 @@ def make_gtsrb_pixel_test_loader(
     device=torch.device("cpu"),
     download=True,
     test_samples=None,
+    seed=42,
 ):
     test_dataset = GTSRB(
         root=data_dir,
@@ -158,6 +192,7 @@ def make_gtsrb_pixel_test_loader(
         test_dataset,
         batch_size=batch_size,
         shuffle=False,
+        worker_init_fn=make_worker_init_fn(seed),
         **loader_kwargs(num_workers, device),
     )
 

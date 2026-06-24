@@ -1,5 +1,7 @@
 # GTSRB 交通标志鲁棒性实验代码说明
 
+> 当前论文级实验建议优先使用 `run_py/run_gtsrb_experiments.py`。该入口会自动运行 `classical_strong`、`hybrid_quantum`、`hybrid_noquantum`、`hybrid_mlp` 的 3-seed 训练、FGSM/PGD/C&W 评估和 mean/std 汇总。旧的 `classical` 别名对应 8 维瓶颈 baseline，只用于兼容旧结果，不建议作为论文主 baseline。
+
 ## 1. 改动概览
 
 本次实验不直接重写原有 MNIST/CIFAR 脚本，而是在保留原代码的基础上新增 GTSRB 实验入口。
@@ -22,6 +24,12 @@
   - 评估 clean accuracy
   - 评估 FGSM、PGD、C&W
   - 输出 JSON、TXT、PNG 结果
+
+- `run_py/run_gtsrb_experiments.py`
+  - 编排多 seed 训练、攻击评估和结果汇总
+
+- `run_py/summarize_gtsrb_results.py`
+  - 汇总 clean accuracy、robust accuracy、ASR 的 mean/std
 
 修改文件：
 
@@ -48,7 +56,7 @@ MacBook Air M5 可以先做小样本调试。完整训练和 C&W/EOT 类攻击�
 
 ```bash
 python run_py/train_gtsrb.py \
-  --model classical \
+  --model classical_strong \
   --epochs 1 \
   --batch-size 32 \
   --widen-factor 1 \
@@ -60,7 +68,7 @@ python run_py/train_gtsrb.py \
 
 ```bash
 python run_py/train_gtsrb.py \
-  --model hybrid \
+  --model hybrid_quantum \
   --epochs 1 \
   --batch-size 16 \
   --widen-factor 1 \
@@ -71,84 +79,59 @@ python run_py/train_gtsrb.py \
 
 注意：`HybridQWideResNet` 使用 PennyLane `default.qubit`，在 Mac 上默认建议先用 CPU。
 
-## 4. 正式训练
+## 4. 正式多 seed 实验
 
-训练经典模型：
-
-```bash
-python run_py/train_gtsrb.py \
-  --model classical \
-  --epochs 50 \
-  --batch-size 128 \
-  --widen-factor 4
-```
-
-训练量子经典混合模型：
+论文级实验使用一键 runner：
 
 ```bash
-python run_py/train_gtsrb.py \
-  --model hybrid \
-  --epochs 50 \
+python run_py/run_gtsrb_experiments.py \
+  --seeds 42,123,2024 \
+  --models classical_strong,hybrid_quantum,hybrid_noquantum,hybrid_mlp \
+  --epochs 80 \
   --batch-size 64 \
+  --eval-batch-size 64 \
+  --optimizer sgd \
+  --lr 0.05 \
   --widen-factor 4 \
-  --device cpu
+  --attacks fgsm,pgd,cw \
+  --epsilons 0,0.0039215686,0.0078431373,0.0156862745,0.031372549,0.062745098 \
+  --test-samples 2000 \
+  --pgd-steps 20 \
+  --cw-steps 50 \
+  --device cuda \
+  --data-dir /data/q3d/datasets/gtsrb \
+  --output-dir /data/q3d/outputs/gtsrb_paper
 ```
 
-如果使用 CUDA 服务器，可以尝试：
-
-```bash
-python run_py/train_gtsrb.py \
-  --model both \
-  --epochs 50 \
-  --batch-size 128 \
-  --widen-factor 10 \
-  --device cuda
-```
-
-默认输出目录：
+输出结构：
 
 ```text
-model_history_gtsrb/
-├── best_wideresnet_gtsrb.pth
-├── best_hybrid_qwideresnet_gtsrb.pth
-├── wideresnet_gtsrb_history.json
-├── hybrid_qwideresnet_gtsrb_history.json
-├── wideresnet_gtsrb_history.png
-└── hybrid_qwideresnet_gtsrb_history.png
+/data/q3d/outputs/gtsrb_paper/
+├── seed_42/
+├── seed_123/
+├── seed_2024/
+├── summary_clean.csv
+├── summary_robustness.csv
+└── summary_ablation.csv
 ```
 
-## 5. 数字攻击评估
+## 5. 单次数字攻击评估
 
-先用 1000 张测试样本做快速评估：
+如果只想对某个 seed 目录重新评估：
 
 ```bash
 python run_py/attack_eval_gtsrb.py \
-  --model both \
-  --attacks fgsm,pgd \
-  --test-samples 1000 \
-  --batch-size 64
-```
-
-完整一点的评估：
-
-```bash
-python run_py/attack_eval_gtsrb.py \
-  --model both \
+  --model classical_strong,hybrid_quantum,hybrid_noquantum,hybrid_mlp \
   --attacks fgsm,pgd,cw \
-  --epsilons 0,0.0039215686,0.0078431373,0.0156862745,0.031372549 \
+  --epsilons 0,0.0039215686,0.0078431373,0.0156862745,0.031372549,0.062745098 \
   --test-samples 2000 \
   --batch-size 64 \
   --pgd-steps 20 \
-  --cw-steps 50
-```
-
-默认输出：
-
-```text
-model_history_gtsrb/
-├── gtsrb_robustness_results.json
-├── gtsrb_robustness_results.txt
-└── gtsrb_robustness_results.png
+  --cw-steps 50 \
+  --device cuda \
+  --data-dir /data/q3d/datasets/gtsrb \
+  --save-dir /data/q3d/outputs/gtsrb_paper/seed_42 \
+  --output-dir /data/q3d/outputs/gtsrb_paper/seed_42
 ```
 
 ## 6. 为什么攻击评估这样写
