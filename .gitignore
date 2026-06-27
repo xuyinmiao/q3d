@@ -48,6 +48,9 @@ data_*/
 # Training outputs and model artifacts
 model_history_*/
 
+# Experiment result archives (contain checkpoints/data, too large for git)
+q3d_results*.zip
+
 # Logs
 *.log
 

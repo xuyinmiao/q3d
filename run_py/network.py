@@ -191,8 +191,13 @@ class WideResNetStrong(nn.Module):
         return self.fc(out)
 
 class HybridQWideResNet(nn.Module):  
-    def __init__(self, n_classes=10, depth=28, widen_factor=10, drop_rate=0.3, n_qubits=8, n_layers=3):
+    def __init__(self, n_classes=10, depth=28, widen_factor=10, drop_rate=0.3, n_qubits=8, n_layers=3,
+                 input_scaling="2pi"):
+        """input_scaling: "2pi" (legacy, multiply sigmoid by 2*pi) or "none" (raw sigmoid in [0,1]).
+        "none" avoids PauliZ gradient saturation at 0/2*pi and stabilizes training."""
         super(HybridQWideResNet, self).__init__()
+        assert input_scaling in ("2pi", "none")
+        self.input_scaling = input_scaling
         
         nChannels = [16, 16*widen_factor, 32*widen_factor, 64*widen_factor]
         assert ((depth - 4) % 6 == 0)
@@ -224,9 +229,20 @@ class HybridQWideResNet(nn.Module):
         out = self.relu(self.bn1(out))
         out = F.avg_pool2d(out, out.size()[2])
         out = out.view(-1, self.nChannels)
-        out = torch.sigmoid(self.feature_reduction(out)) * (2 * np.pi)
-        out = self.quantum_layer(out)
+        scaled = torch.sigmoid(self.feature_reduction(out))
+        if self.input_scaling == "2pi":
+            scaled = scaled * (2 * np.pi)
+        out = self.quantum_layer(scaled)
         return self.fc(out)
+
+    def quantum_parameters(self):
+        """Return parameters belonging to the quantum layer (for separate lr / inspection)."""
+        return list(self.quantum_layer.parameters())
+
+    def classical_parameters(self):
+        """Return all parameters except the quantum layer."""
+        qparams = set(id(p) for p in self.quantum_layer.parameters())
+        return [p for p in self.parameters() if id(p) not in qparams]
 
 class HybridQWideResNetNoQuantum(nn.Module):
     """Hybrid-shaped WRN ablation that removes the quantum layer."""

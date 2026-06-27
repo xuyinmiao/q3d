@@ -100,6 +100,7 @@ def build_model(args, model_name):
             drop_rate=args.drop_rate,
             n_qubits=args.n_qubits,
             n_layers=args.n_layers,
+            input_scaling=getattr(args, "quantum_input_scaling", "2pi"),
         )
     if model_name == "hybrid_noquantum":
         return HybridQWideResNetNoQuantum(
@@ -393,6 +394,22 @@ def parse_args():
     parser.add_argument("--latent-dim", type=int, default=8)
     parser.add_argument("--n-qubits", type=int, default=8)
     parser.add_argument("--n-layers", type=int, default=6)
+
+    # Must match the training run being evaluated (saved in history metadata).
+    parser.add_argument(
+        "--quantum-input-scaling",
+        choices=["2pi", "none"],
+        default="2pi",
+        help="Scaling used when training the hybrid_quantum checkpoint. "
+             "Must match training to load weights correctly.",
+    )
+    parser.add_argument(
+        "--no-2pi-scaling",
+        dest="quantum_input_scaling",
+        action="store_const",
+        const="none",
+        help="Shorthand for --quantum-input-scaling none.",
+    )
 
     parser.add_argument("--pgd-steps", type=int, default=10)
     parser.add_argument("--pgd-alpha", type=float, default=None)

@@ -106,6 +106,7 @@ def build_model(args, model_name):
             drop_rate=args.drop_rate,
             n_qubits=args.n_qubits,
             n_layers=args.n_layers,
+            input_scaling=args.quantum_input_scaling,
         )
     if model_name == "hybrid_noquantum":
         return HybridQWideResNetNoQuantum(
@@ -136,7 +137,41 @@ def history_stem(model_name):
     return f"{normalize_model_name(model_name)}_gtsrb"
 
 
-def make_optimizer(args, model):
+def make_optimizer(args, model, model_name=""):
+    """Build optimizer. For hybrid_quantum, use a separate (smaller) lr on the
+    quantum layer parameters to stabilize PennyLane default.qubit training."""
+    canonical = normalize_model_name(model_name) if model_name else ""
+    use_split = (
+        canonical == "hybrid_quantum"
+        and getattr(args, "quantum_lr", None) is not None
+        and hasattr(model, "quantum_parameters")
+    )
+
+    if use_split:
+        classical_params = model.classical_parameters()
+        quantum_params = model.quantum_parameters()
+        if args.optimizer == "sgd":
+            return optim.SGD(
+                [
+                    {"params": classical_params, "lr": args.lr},
+                    {"params": quantum_params, "lr": args.quantum_lr},
+                ],
+                lr=args.lr,
+                momentum=0.9,
+                weight_decay=args.weight_decay,
+                nesterov=True,
+            )
+        if args.optimizer == "adamw":
+            return optim.AdamW(
+                [
+                    {"params": classical_params, "lr": args.lr},
+                    {"params": quantum_params, "lr": args.quantum_lr},
+                ],
+                lr=args.lr,
+                weight_decay=args.weight_decay,
+            )
+        raise ValueError(f"Unknown optimizer: {args.optimizer}")
+
     if args.optimizer == "sgd":
         return optim.SGD(
             model.parameters(),
@@ -150,7 +185,7 @@ def make_optimizer(args, model):
     raise ValueError(f"Unknown optimizer: {args.optimizer}")
 
 
-def train_epoch(model, loader, criterion, optimizer, device):
+def train_epoch(model, loader, criterion, optimizer, device, grad_clip=None):
     model.train()
     total_loss, total_correct, total = 0.0, 0, 0
     with Progress(
@@ -168,6 +203,8 @@ def train_epoch(model, loader, criterion, optimizer, device):
             outputs = model(inputs)
             loss = criterion(outputs, labels)
             loss.backward()
+            if grad_clip is not None and grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
 
             total_loss += loss.item()
@@ -241,6 +278,9 @@ def make_metadata(args, model_name, train_loader, val_loader, test_loader, devic
         "latent_dim": args.latent_dim,
         "n_qubits": args.n_qubits,
         "n_layers": args.n_layers,
+        "quantum_input_scaling": getattr(args, "quantum_input_scaling", "2pi"),
+        "quantum_lr": getattr(args, "quantum_lr", None),
+        "grad_clip": getattr(args, "grad_clip", None),
         "image_size": args.image_size,
         "val_fraction": args.val_fraction,
         "train_size": len(train_loader.dataset),
@@ -259,7 +299,7 @@ def run_training(args, model_name, train_loader, val_loader, test_loader, save_d
 
     model = build_model(args, model_name).to(device)
     criterion = nn.CrossEntropyLoss()
-    optimizer = make_optimizer(args, model)
+    optimizer = make_optimizer(args, model, model_name=model_name)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
     ckpt_path = os.path.join(save_dir, checkpoint_name(model_name))
@@ -295,7 +335,7 @@ def run_training(args, model_name, train_loader, val_loader, test_loader, save_d
 
     for epoch in range(args.epochs):
         console.rule(f"[bold blue]Epoch {epoch + 1}/{args.epochs}[/bold blue]")
-        train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, device)
+        train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, device, grad_clip=getattr(args, "grad_clip", None))
         val_loss, val_acc = evaluate(model, val_loader, criterion, device)
         scheduler.step()
 
@@ -371,6 +411,38 @@ def parse_args():
     parser.add_argument("--latent-dim", type=int, default=8)
     parser.add_argument("--n-qubits", type=int, default=8)
     parser.add_argument("--n-layers", type=int, default=6)
+
+    # --- Quantum-layer training stabilization (opt-in; defaults preserve legacy behavior) ---
+    parser.add_argument(
+        "--quantum-input-scaling",
+        choices=["2pi", "none"],
+        default="2pi",
+        help="Scaling applied to sigmoid output before the quantum layer. "
+             "'2pi' is legacy (multiply by 2*pi); 'none' feeds raw [0,1] to AngleEmbedding "
+             "and avoids PauliZ gradient saturation. Use 'none' if hybrid_quantum fails to converge.",
+    )
+    parser.add_argument(
+        "--quantum-lr",
+        type=float,
+        default=None,
+        help="Separate learning rate for the quantum layer parameters of HybridQWideResNet. "
+             "If unset, a single lr is used for all parameters (legacy). "
+             "Try 0.01 when the classical lr (0.05) destabilizes quantum training.",
+    )
+    parser.add_argument(
+        "--grad-clip",
+        type=float,
+        default=None,
+        help="Max L2 norm for gradient clipping on all parameters. "
+             "Recommended 1.0 for unstable quantum training. Disabled if unset.",
+    )
+    parser.add_argument(
+        "--no-2pi-scaling",
+        dest="quantum_input_scaling",
+        action="store_const",
+        const="none",
+        help="Shorthand for --quantum-input-scaling none.",
+    )
     return parser.parse_args()
 
 

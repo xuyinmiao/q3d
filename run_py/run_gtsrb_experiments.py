@@ -65,6 +65,8 @@ def train_model(args, seed, model_name, seed_dir):
         str(args.n_qubits),
         "--n-layers",
         str(args.n_layers),
+        "--quantum-input-scaling",
+        args.quantum_input_scaling,
         "--device",
         args.device,
         "--data-dir",
@@ -72,6 +74,8 @@ def train_model(args, seed, model_name, seed_dir):
         "--save-dir",
         seed_dir,
     ]
+    add_flag(cmd, "--quantum-lr", args.quantum_lr)
+    add_flag(cmd, "--grad-clip", args.grad_clip)
     add_flag(cmd, "--train-samples", args.train_samples)
     add_flag(cmd, "--val-samples", args.val_samples)
     if args.no_download:
@@ -124,6 +128,8 @@ def evaluate_seed(args, seed, models, seed_dir):
         str(args.n_qubits),
         "--n-layers",
         str(args.n_layers),
+        "--quantum-input-scaling",
+        args.quantum_input_scaling,
         "--pgd-steps",
         str(args.pgd_steps),
         "--cw-steps",
@@ -177,6 +183,25 @@ def parse_args():
     parser.add_argument("--latent-dim", type=int, default=8)
     parser.add_argument("--n-qubits", type=int, default=8)
     parser.add_argument("--n-layers", type=int, default=6)
+    parser.add_argument(
+        "--quantum-input-scaling",
+        choices=["2pi", "none"],
+        default="2pi",
+        help="Scaling applied to the quantum layer input. 'none' disables the 2*pi "
+             "amplification that can saturate PauliZ gradients and destabilize training.",
+    )
+    parser.add_argument(
+        "--quantum-lr",
+        type=float,
+        default=None,
+        help="Separate learning rate for the quantum layer parameters (only HybridQWideResNet).",
+    )
+    parser.add_argument(
+        "--grad-clip",
+        type=float,
+        default=None,
+        help="Max L2 norm for gradient clipping during training.",
+    )
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--allow-mps-quantum", action="store_true")
 
