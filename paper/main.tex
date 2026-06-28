@@ -391,12 +391,19 @@ The trainable quantum parameters are the weights of the
 \textsc{StronglyEntanglingLayers} ansatz, with shape
 $(n_{\text{layers}}, n_q, 3) = (6, 8, 3)$. Gradients are computed via
 PennyLane's automatic differentiation and backpropagated through the
-classical head end-to-end.
+classical head end-to-end. \Cref{fig:circuit} shows the gate-level
+structure of the circuit.
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=0.7\textwidth]{figures/quantum_circuit.png}
-\caption{The 8-qubit variational quantum circuit.}
+\includegraphics[width=0.95\textwidth]{figures/quantum_circuit.png}
+\caption{The 8-qubit variational quantum circuit used in
+\texttt{hybrid\_quantum}. Inputs are encoded via $Y$-rotation angle
+embedding (left); six \textsc{StronglyEntanglingLayers} apply
+parameterized \texttt{Rot} gates and two rounds of \texttt{CNOT}
+entanglement per layer (middle); Pauli-$Z$ expectation values are
+measured on each qubit (right). Trainable parameters have shape
+$(6, 8, 3) = 144$.}
 \label{fig:circuit}
 \end{figure}
 
